@@ -1,23 +1,18 @@
 # Fun-CosyVoice3
 
-[Fun-CosyVoice3-0.5B](https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512) is a
-lightweight text-to-speech model (0.5B parameters) from the FunAudioLLM team at Alibaba.
-It uses a Qwen2.5-0.5B backbone with FSQ speech tokens (vocab = 6561 + 200 special tokens),
-conditioned on a CAMPPlus speaker embedding and prompt speech tokens extracted via an ONNX
-speech tokenizer. It supports zero-shot voice cloning, cross-lingual synthesis, and
-instruction-based style control. The model produces 24 kHz speech at a
-25 Hz token frame rate through the `preprocessing → tts_engine → vocoder` pipeline and the
-OpenAI-compatible `/v1/audio/speech` endpoint.
+[Fun-CosyVoice3-0.5B](https://huggingface.co/FunAudioLLM/Fun-CosyVoice3-0.5B-2512) is a lightweight text-to-speech model (0.5B parameters) from the FunAudioLLM team at Alibaba.
+It uses a Qwen2.5-0.5B backbone with FSQ speech tokens (vocab = 6561 + 200 special tokens), conditioned on a CAMPPlus speaker embedding and prompt speech tokens extracted via an ONNX
+speech tokenizer. It supports zero-shot voice cloning, cross-lingual synthesis, and instruction-based style control. The model produces 24 kHz speech at a rate of 25 Hz token frame rate through the `preprocessing → tts_engine → vocoder` pipeline and the OpenAI-compatible `/v1/audio/speech` endpoint.
 
 ## Prerequisites
 
-Install `sglang-omni` by following [Installation](../get_started/installation.md).
+Install `sglang-omni` from source as in [Installation](../get_started/installation.md).
 
-Fun-CosyVoice3 depends on the `cosyvoice` package:
+Fun-CosyVoice3 needs `sox` and a few extra Python packages. From the repository root, install the extra against **this checkout**:
 
 ```bash
 apt-get update && apt-get install -y sox
-uv pip install "sglang-omni[fun-cosyvoice3]"
+uv pip install -e ".[fun-cosyvoice3]"
 ```
 
 Clone the CosyVoice repository with its Matcha-TTS submodule and add both to `PYTHONPATH`:
@@ -34,14 +29,9 @@ git -C ${COSYVOICE_PATH}/third_party/Matcha-TTS checkout ${MATCHA_TTS_COMMIT}
 export PYTHONPATH="${COSYVOICE_PATH}:${COSYVOICE_PATH}/third_party/Matcha-TTS:$PYTHONPATH"
 ```
 
-**Do not** run `pip install -r requirements.txt` from the CosyVoice checkout. That file pins
-`torch`, `torchaudio`, `transformers`, and `diffusers` versions that conflict with the
-`sglang-omni` core pins — only the `fun-cosyvoice3` extra above and the two `PYTHONPATH`
-entries are needed; the CosyVoice Flow and HiFT modules import fine against the
-`sglang-omni` versions of those shared packages.
+**Do not** run `pip install -r requirements.txt` from the CosyVoice checkout. That file pins `torch`, `torchaudio`, `transformers`, and `diffusers` versions that conflict with the `sglang-omni` core pins. Only the `fun-cosyvoice3` extra above and the two `PYTHONPATH` entries are needed; the CosyVoice Flow and HiFT modules import fine against the `sglang-omni` versions of those shared packages.
 
-The checkpoint includes ONNX models for the speech tokenizer and speaker encoder, which use
-the `onnxruntime` already pinned in `sglang-omni`'s core dependencies.
+The checkpoint includes ONNX models for the speech tokenizer and speaker encoder, which use the `onnxruntime` already pinned in `sglang-omni`'s core dependencies.
 
 Download the checkpoint:
 
@@ -49,147 +39,254 @@ Download the checkpoint:
 hf download FunAudioLLM/Fun-CosyVoice3-0.5B-2512
 ```
 
-## Server Configuration
-
-The pipeline is `preprocessing → tts_engine → vocoder`. First startup can take several
-minutes while the `tts_engine` captures CUDA graphs.
+The pipeline is `preprocessing → tts_engine → vocoder`. First startup can take several minutes while the `tts_engine` captures CUDA graphs.
 
 ```bash
 sgl-omni serve \
   --model-path FunAudioLLM/Fun-CosyVoice3-0.5B-2512 \
-  --config examples/configs/fun_cosyvoice3_0_5b.yaml \
   --port 8000
 ```
 
+## Apple Silicon
+
+On Apple Silicon, install the optional
+Fun-CosyVoice3 extra with the repository installer, then expose Homebrew's
+keg-only FFmpeg libraries to TorchCodec:
+
+```bash
+brew install sox
+SGLANG_OMNI_EXTRAS=fun-cosyvoice3 ./install.sh
+source .venv-apple/bin/activate
+export DYLD_LIBRARY_PATH="$(brew --prefix ffmpeg@7)/lib${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+```
+
+The model runs through PyTorch MPS with the official checkpoint:
+
+```bash
+sgl-omni serve \
+  --model-path FunAudioLLM/Fun-CosyVoice3-0.5B-2512 \
+  --port 8000
+```
+
+
+For Intel GPUs, follow the [Fun-CosyVoice3 XPU recipe](../get_started/installation_xpu.md#fun-cosyvoice3-text-to-speech-single-xpu).
+
+## Synthesizing Speech
+
+### Zero-shot Voice Cloning
+
+CosyVoice3 clones a voice from a short reference audio clip. `ref_audio` can be a local path, file URL, data URL, or HTTP URL. `ref_text` (the transcript of the reference clip) is optional but recommended for better alignment.
+
+1. Using CURL:
+
+```bash
+curl -X POST http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+    "input": "SGLang-Omni makes text-to-speech fast and easy to deploy.",
+    "ref_audio": "https://huggingface.co/datasets/zhaochenyang20/seed-tts-eval-mini/resolve/main/en/prompt-wavs/common_voice_en_10119832.wav",
+    "ref_text": "We asked over twenty different people, and they all said it was his."
+  }' \
+  --output output.wav
+```
+
+2. Using Python:
+
+```python
+import requests
+
+resp = requests.post(
+    "http://localhost:8000/v1/audio/speech",
+    json={
+        "model": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+        "input": "Get the trust fund to the bank early.",
+        "ref_audio": "https://huggingface.co/datasets/zhaochenyang20/seed-tts-eval-mini/resolve/main/en/prompt-wavs/common_voice_en_10119832.wav",
+        "ref_text": "We asked over twenty different people, and they all said it was his.",
+    },
+)
+resp.raise_for_status()
+with open("output.wav", "wb") as f:
+    f.write(resp.content)
+```
+
+### Cross-lingual Synthesis
+
+CosyVoice3 supports cross-lingual voice cloning where the reference speaker speaks a different language than the synthesis text. Omit `ref_text` to enter cross-lingual mode.
+
+1. Using CURL:
+
+```bash
+curl -X POST http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+    "input": "今天天气真好，我们一起出去散步吧。",
+    "ref_audio": "https://huggingface.co/datasets/zhaochenyang20/seed-tts-eval-mini/resolve/main/en/prompt-wavs/common_voice_en_10119832.wav"
+  }' \
+  --output output.wav
+```
+
+2. Using Python:
+
+```python
+import requests
+
+resp = requests.post(
+    "http://localhost:8000/v1/audio/speech",
+    json={
+        "model": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+        "input": "今天天气真好，我们一起出去散步吧。",
+        "ref_audio": "https://huggingface.co/datasets/zhaochenyang20/seed-tts-eval-mini/resolve/main/en/prompt-wavs/common_voice_en_10119832.wav",
+    },
+)
+resp.raise_for_status()
+with open("output.wav", "wb") as f:
+    f.write(resp.content)
+```
+
+### Instruction-based Style Control
+
+Pass `instructions` to guide prosody, emotion, or speaking style:
+
+```bash
+curl -X POST http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+    "input": "Welcome to our annual developer conference.",
+    "ref_audio": "https://huggingface.co/datasets/zhaochenyang20/seed-tts-eval-mini/resolve/main/en/prompt-wavs/common_voice_en_10119832.wav",
+    "instructions": "Speak in a cheerful and energetic tone, as if addressing a large audience."
+  }' \
+  --output output.wav
+```
+
+### Speed Control
+
+Adjust playback speed with `speed` (default `1.0`):
+
+```bash
+curl -X POST http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+    "input": "This is spoken at one point three times normal speed.",
+    "ref_audio": "https://huggingface.co/datasets/zhaochenyang20/seed-tts-eval-mini/resolve/main/en/prompt-wavs/common_voice_en_10119832.wav",
+    "speed": 1.3
+  }' \
+  --output output.wav
+```
+
+### Streaming
+
+Incremental Flow + HiFT decoding supports streaming. Set `stream: true` and `response_format: "pcm"` to emit audio before AR generation completes. The vocoder uses CosyVoice3's causal chunk loop: 25 speech tokens per hop (~1 s of audio). The first PCM chunk is emitted once AR produces `28 + prompt_pad` tokens (where `prompt_pad` rounds the Flow prompt length to a 25-token multiple). Later hops grow from 25 to 50 to 100 tokens in vocoder to increase batching efficiency without affecting audio continuity or real-time factor, only the decoding granularity changes, not the total synthesis time. The scheduler processes at most one hop per request per step to prevent backlogged streams from monopolizing the GPU. Non-streaming requests decode the entire utterance in one pass.
+
+Optional serving knobs (vocoder factory):
+
+| Factory arg | Default | Notes |
+|---|---|---|
+| `token_hop_len` | `25` | Base hop size; must match training chunk size |
+| `token_max_hop_len` | `100` | Cap for `25 → 50 → 100` growth |
+| `disable_hop_growth` | `false` | Leave off; growth ON performs better at high concurrency |
+
+```bash
+curl -X POST http://localhost:8000/v1/audio/speech \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+    "input": "Get the trust fund to the bank early.",
+    "ref_audio": "https://huggingface.co/datasets/zhaochenyang20/seed-tts-eval-mini/resolve/main/en/prompt-wavs/common_voice_en_10119832.wav",
+    "ref_text": "We asked over twenty different people, and they all said it was his.",
+    "stream": true,
+    "response_format": "pcm"
+  }' \
+  --output output.pcm
+```
+
+## Generation Parameters
+
+| Parameter | Default | Notes |
+|---|---|---|
+| `model` | served model | Served model identifier |
+| `input` | (required) | Text to synthesize |
+| `ref_audio` | `null` | Reference audio for voice cloning (path / URL / data URL) |
+| `ref_text` | `null` | Transcript of the reference audio. Improves cloning quality; omit for cross-lingual mode |
+| `instructions` | `null` | Instruction text for style/prosody/emotion guidance |
+| `speed` | `1.0` | Playback speed multiplier |
+| `temperature` | `0.7` | Sampling temperature |
+| `top_p` | `0.8` | Top-p sampling |
+| `top_k` | `20` | Top-k sampling |
+| `repetition_penalty` | `1.21` | Repetition penalty |
+| `max_new_tokens` | `min(2048, 20x target text tokens)` | Maximum number of generated speech tokens. If omitted, derived from the target text length (capped at 2048); stop tokens are also suppressed until at least `2x` that length has been generated |
+| `seed` | `null` | Random seed for reproducibility |
+| `stream` | `false` | Incremental causal Flow + HiFT; first PCM chunk after `28 + prompt_pad` speech tokens (`prompt_pad` rounds the prompt length to a multiple of 25) |
+
+## Serving Optimization
+
 ### Flow Decoder Batching
 
-The buffered vocoder uses the batch-capable `FunCosyVoice3Flow.inference` API for every
-request. `SimpleScheduler` collects up to 16 requests for at most 30 ms, then the vocoder
-groups requests by total mel length in 50-frame buckets. Every bucket, including a
-single-request bucket, calls the same built-in Flow inference method; packing, padding,
-masking, CFM Euler/CFG, and output unpadding are handled inside the Flow implementation.
-The 50-frame default matches the current DiT estimator's static chunk size; a larger bucket
-can combine more requests at the cost of additional padding, compute, and peak GPU memory.
+For complete buffered requests, scheduler admission uses exact mel frames (`flow_batch_admission_frames`, default `8000`). Adaptive Flow grouping is enabled by default: it sorts admitted requests by total mel length and lets adjacent requests share one Flow solve when the maximum within-group length gap and global added-padding budget stay within:
 
-The scheduler uses a bucket-rounded Flow admission budget, configured by
-`flow_batch_admission_frames` (8,000 by default). It controls whether a later request joins the
-current Flow batch; it is not a maximum supported request length. A request whose total
-prompt-plus-output mel length exceeds that budget runs as a B=1 Flow batch through the same
-adapter, and later requests wait for the next scheduler batch. This preserves valid long
-generations while preventing them from being combined with more work.
+```text
+flow_merge_max_gap_frames = 384
+flow_merge_pad_budget_percent = 25
+```
 
-HiFT is batched the same way: the mels from one Flow bucket are right-zero-padded into a single
-tensor, decoded in one HiFT call, and sliced back to each request's true length, under the
-padding budget `hift_max_padding_waste` (1.5 by default; `1.0` only groups requests that need no
-padding at all). HiFT is prepared for this at load time by folding away its `weight_norm`
-parametrizations. Right-zero-padding matches the zero padding HiFT applies in single-request
-inference, so batched output is identical except in the final mel frame of padded requests.
+HiFT grouping is independent and applies its existing `hift_max_padding_waste` policy to the produced mels. Causal streaming uses a separate Flow + HiFT path.
 
-The built-in Flow implementation supports the pinned CosyVoice PyTorch estimator, an opt-in
-TensorRT estimator (see below), and buffered `streaming=False, finalize=True` inference only.
-
-Change the mel-frame bucket size, for example to 100 frames:
+Increase the normal Flow batching budget only after measuring the target GPU.
 
 ```bash
 sgl-omni serve \
   --model-path FunAudioLLM/Fun-CosyVoice3-0.5B-2512 \
-  --config examples/configs/fun_cosyvoice3_0_5b.yaml \
-  --port 8000 \
-  --vocoder.factory.flow_batch_bucket_frames 100
-```
-
-The same setting can be written in the pipeline config under the vocoder's
-`factory` group:
-
-```yaml
-stages:
-  vocoder:
-    factory:
-      flow_batch_bucket_frames: 100
-```
-
-Increase the normal Flow batching budget only after measuring the target GPU. This changes the
-maximum aggregate padded work admitted into one scheduler batch; it does not reject a longer
-single request.
-
-```bash
-sgl-omni serve \
-  --model-path FunAudioLLM/Fun-CosyVoice3-0.5B-2512 \
-  --config examples/configs/fun_cosyvoice3_0_5b.yaml \
   --port 8000 \
   --vocoder.factory.flow_batch_admission_frames 4000
 ```
 
-The YAML equivalent is:
+On the other hand, decrease the admission budget to reduce latency and lower peak GPU memory.
 
-```yaml
-stages:
-  vocoder:
-    factory:
-      flow_batch_admission_frames: 4000
-```
+### Vocoder Configuration
 
-The remaining vocoder `factory` options are `max_batch_size` (16) and `max_batch_wait_ms` (30)
-for the scheduler batch, `dtype` (`bfloat16`) for the Flow autocast, `hift_dtype` (`float32`,
-independent of `dtype`; `bfloat16` measured no faster for HiFT on H200 and lowers output fidelity)
-for the HiFT autocast, `enable_dit_torch_compile`, and `enable_flow_estimator_trt`
-(see below; mutually exclusive DiT accelerators). The
-`tts_engine` stage takes `onnx_intra_op_threads` (16) for the speech tokenizer and speaker
-encoder ONNX sessions, and `preprocessing` takes `max_concurrency` (8) for concurrent reference
-conditioning.
+Vocoder configuration controls batching, precision, and acceleration. The scheduler accepts `max_batch_size` (16) and `max_batch_wait_ms` (30) to tune batch assembly. Flow uses `dtype` (bfloat16) for autocast, while HiFT uses `hift_dtype` (float32), independent of Flow; bfloat16 shows no speedup on H200 and reduces fidelity. Buffered Flow CUDA Graphs and DiT `torch.compile` are on by default. The Flow prefix cache keeps the keys and values of each stream's completed frames for its later hops. It takes the GPU memory left after the TTS engine and the vocoder's other allocations, within the stage's `gpu_memory_fraction` or `total_reserve_bytes` when one is declared. It leaves free the prefix graphs and the largest step the vocoder admits, both measured at startup (the larger of `max_batch_size` streams, each a 30 s reference prompt and the TTS engine's context length of generated tokens, and the largest non-streaming batch that `flow_batch_admission_frames` lets through), and the runtime headroom (`1 - mem_fraction_static` of the GPU memory free before the TTS engine loaded, or before the vocoder loaded in a process without the engine). The cache's size counts its padding block, each stream's convolution context and the allocator's rounding. `flow_prefix_cache_gb` caps that size, a larger value falls back to it with a warning, and `0` turns the cache off. Streaming hops over the Flow prefix cache replay their Euler solve from CUDA graphs captured per frame tier (one at every whole DiT chunk, from a tier holding the shortest hop up to `max_batch_size` rows of the longest hop). A step above the largest tier runs in eager mode, and `enable_flow_prefix_cuda_graph=false` turns the graphs off. A stream's final step replays its whole-history Euler solve from CUDA graphs captured per frame tier with `max_batch_size` row slots, on the prefill graph ladder up to `flow_batch_admission_frames`. A final step above the largest tier runs eagerly, and `enable_flow_whole_history_cuda_graph=false` turns these graphs off. HiFT's decode replays from CUDA graphs captured per row tier, up to `max_batch_size`, and per frame tier, from a first hop's window to a final's. F0 and the sine source stay eager, and a step wider than the largest frame tier decodes eagerly. The graphs need a float32 HiFT on CUDA with Triton, and `enable_hift_cuda_graph=false` turns them off. `enable_flow_estimator_trt` stays opt-in; enabling it turns the DiT compile default off, and enabling both explicitly is rejected.
 
-The built-in Flow implementation is tied to the Flow/CFM structure in the documented CosyVoice commit
-`074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc`. It does not patch the CosyVoice source on disk; an
-incompatible Flow structure fails directly instead of using a fallback implementation.
+The TTS engine stage accepts `onnx_intra_op_threads` (16) for the speech tokenizer and speaker encoder ONNX sessions. Preprocessing takes `max_concurrency` (8) to limit concurrent reference conditioning requests.
+
+On CUDA the TTS engine replays prompt prefills from full CUDA graphs captured on the prefill batch ladder, which starts at `1` because a prompt that is already cached prefills a single token. The graphs need the `fa3`, `fa4` or `flashinfer` attention backend, and with any other backend the default prefill runs in eager mode. Opt out with `--tts_engine.engine.cuda_graph_backend_prefill disabled`. Declaring `cuda_graph_bs_prefill` keeps the declared list as is.
 
 ### torch.compile for the DiT backbone
 
-The flow decoder's DiT backbone (`flow.decoder.estimator`, a 22-layer DiT invoked
-once per Euler step) can be compiled with `torch.compile` to reduce per-step
-kernel-launch overhead. It is opt-in because it pays a one-time compile cost at
-startup and is most beneficial under sustained throughput load. The compile uses
-`dynamic=True`, so one symbolic-sequence-length graph serves every utterance
-length.
-
-Enable it by overriding the vocoder stage's `factory` args (the `stages.`
-prefix is implied in the CLI dotted path):
+`torch.compile` is on by default. It reduces DiT kernel-launch overhead for supported TTS execution paths, including streaming PackedDiT. Startup warmup covers varying batch sizes and mel lengths before serving. Existing CUDA Graph behavior is unchanged. Pass `enable_dit_torch_compile=false` to run the DiT eager.
 
 ```bash
 sgl-omni serve \
   --model-path FunAudioLLM/Fun-CosyVoice3-0.5B-2512 \
-  --config examples/configs/fun_cosyvoice3_0_5b.yaml \
-  --vocoder.factory.enable_dit_torch_compile true \
+  --vocoder.factory.enable_dit_torch_compile false \
   --port 8000
 ```
 
-Do not enable this together with TensorRT for the same DiT (see below).
+Enabling TensorRT turns this default off.
 
 ### TensorRT for the DiT backbone
 
-The same `flow.decoder.estimator` can be replaced with a TensorRT engine built
-from the checkpoint's bundled ONNX (`flow.decoder.estimator.fp32.onnx` is
-preferred). This is opt-in: TensorRT is not a `sglang-omni` extra, first
-startup builds and caches a `.plan` under `COSYVOICE3_TRT_CACHE` or
-`~/.cache/sglang-omni/cosyvoice3_trt`, and the official CosyVoice ONNX freezes
-CFG batch at 2 (t and spks are static; only the mel time dim is dynamic).
-Packed Flow (CFG batch = `2 * request_batch`) still works by chunking
-request-wise cond/uncond pairs into that CFG=2 engine.
+TensorRT accelerates the DiT by building a cached `.plan` engine from the bundled ONNX. The CFG batch is frozen at 2 with dynamic mel dimensions; larger request batches are handled by chunking cond/uncond pairs. Enabling it turns the DiT torch.compile default off; enabling both explicitly is rejected.
 
-TensorRT and `torch.compile` both replace the same DiT, so they are mutually
-exclusive. Enable only one:
+```bash
+uv pip install tensorrt
+```
+See NVIDIA's [pip install guide](https://docs.nvidia.com/deeplearning/tensorrt/latest/installing-tensorrt/install-pip.html) for more details.
+
+Enable the flag:
 
 ```bash
 sgl-omni serve \
   --model-path FunAudioLLM/Fun-CosyVoice3-0.5B-2512 \
-  --config examples/configs/fun_cosyvoice3_0_5b.yaml \
   --vocoder.factory.enable_flow_estimator_trt true \
   --port 8000
 ```
 
-On one H200, packed Flow + HiFT (80 target tokens, 25 prompt tokens,
-6 timed iters after 2 warmups) was:
+On one H200, Flow latency and vocoder RTF comparisons:
 
-| Backend | B | Flow latency | Vocoder RTF |
+| Backend | Batch size | Flow latency | Vocoder RTF |
 |---|---|---|---|
 | eager | 1 | 1131 ms | 0.359 |
 | torch.compile | 1 | 1070 ms | 0.340 |
@@ -198,13 +295,7 @@ On one H200, packed Flow + HiFT (80 target tokens, 25 prompt tokens,
 | torch.compile | 4 | 220 ms | 0.022 |
 | TensorRT (chunked 4× CFG pairs) | 4 | 77 ms | 0.011 |
 
-TensorRT here is not bit-exact with eager PyTorch (FP16 TensorRT tactics on
-the fp32 ONNX; cosine similarity about 0.995 on one packed mel).
-
-The same three vocoder backends on the full SeedTTS EN set (1088 samples),
-buffered `/v1/audio/speech` (non-streaming, generate-only), one H200, 0
-failures. ASR WER was not remeasured; vocoder-only mel cosine vs eager is
-about 0.995.
+Full SeedTTS EN set (1088 samples) on buffered `/v1/audio/speech`, one H200:
 
 | Backend | Concurrency | Latency mean | RTF mean | Throughput |
 |---|---|---|---|---|
@@ -215,13 +306,41 @@ about 0.995.
 | torch.compile | 16 | 3.151 s | 0.706 | 5.059 req/s |
 | TensorRT | 16 | 2.549 s | 0.570 | 6.243 req/s |
 
-At concurrency 1 the pipeline is still mostly preprocessing + AR, so TensorRT
-is about 1.17× `torch.compile`. At concurrency 16 the vocoder is the bottleneck
-and TensorRT is about 1.23× compile throughput (2.23× eager). It remains
-opt-in because TensorRT is a separate install and the first engine build takes
-about a minute.
+This result is only demonstrative, since we have further optimization after the evluation of TensorRT is done.
 
-## Synthesizing Speech
+### Speculative Decoding
+
+SpeechSpec's DSpark draft [`yuekai/cosyvoice3_llm_dspark`](https://huggingface.co/yuekai/cosyvoice3_llm_dspark) proposes 7 speech tokens per step from three of the LLM's hidden layers, and the LLM verifies them in one forward pass.
+
+```bash
+sgl-omni serve \
+  --model-path FunAudioLLM/Fun-CosyVoice3-0.5B-2512 \
+  --tts_engine.engine.speculative_draft_model_path yuekai/cosyvoice3_llm_dspark \
+  --port 8000
+```
+
+Verification reproduces CosyVoice3's sampler exactly: temperature, top-k/top-p, the repetition penalty, the minimum-length stop mask and the repetition-aware redraw. The speech tokens therefore follow the same distribution as without the draft. A request's `seed` fixes only its first token, because the draft and verify draws come from the process's random generator, so seeded output is not reproducible while the draft is on.
+
+LLM speech-token throughput without the vocoder (Seed-TTS zh, 2,020 utterances, one H200 141GB with SGLang 0.5.22, target and draft on FA3, each batch run to completion), with the default sampling and about 3.0 tokens accepted per verify:
+
+| Batch | Baseline | DSpark | Speedup |
+|---|---|---|---|
+| 1 | 434 tok/s | 711 tok/s | 1.64x |
+| 8 | 2,421 tok/s | 3,794 tok/s | 1.57x |
+| 16 | 4,260 tok/s | 6,388 tok/s | 1.50x |
+| 64 | 11,030 tok/s | 15,027 tok/s | 1.36x |
+
+With SpeechSpec's benchmark sampling (`temperature 0.8`, `top_p 0.95`, `top_k 15`, `repetition_penalty 1.1`), the speedups are 1.64x, 1.61x, 1.57x and 1.42x.
+
+End-to-end streaming on the same GPU (`benchmark_tts_seedtts --stream`, all 2,020 Seed-TTS zh utterances, default sampling), baseline → DSpark:
+
+| Concurrency | Throughput | RTF mean | TTFC mean | WER (Qwen3-ASR) |
+|---|---|---|---|---|
+| 1 | 2.68 → 3.77 req/s | 0.071 → 0.051 | 0.140 → 0.122 s | 0.77% → 0.71% |
+| 8 | 12.37 → 15.59 req/s | 0.123 → 0.098 | 0.230 → 0.227 s | 0.75% → 0.79% |
+| 16 | 18.02 → 21.08 req/s | 0.169 → 0.146 | 0.306 → 0.333 s | 0.76% → 0.73% |
+
+The vocoder takes a growing share of each request as concurrency rises, so the end-to-end gain is largest at low concurrency.
 
 ### Zero-shot Voice Cloning
 
@@ -241,7 +360,7 @@ curl -X POST http://localhost:8000/v1/audio/speech \
   --output output.wav
 ```
 
-#### Python
+**Python**
 
 ```python
 import requests
@@ -308,11 +427,29 @@ curl -X POST http://localhost:8000/v1/audio/speech \
   --output output.wav
 ```
 
-### Streaming (Planned)
+### Streaming
 
-Incremental Flow + HiFT decoding is planned but is not enabled in the current implementation.
-The current vocoder buffers the generated speech tokens and returns one complete waveform.
-Do not rely on `stream=true` for time-to-first-audio until the streaming decoder is wired.
+Incremental Flow + HiFT decoding is enabled. Set `stream: true` and use
+`response_format: "pcm"` so the server can emit audio before speech-token
+generation finishes.
+
+The vocoder follows CosyVoice3's causal chunk loop: 25 speech tokens per hop
+(`pre_lookahead_len=3`, 25 Hz → about 1 s of audio per chunk). The first PCM
+chunk is emitted once the AR stage has produced `28 + prompt_pad` tokens,
+where `prompt_pad` (0–24) rounds the Flow prompt-token length up to a
+multiple of 25. Later hops grow 25 → 50 → 100 tokens like the upstream
+`CosyVoice3Model` (default; keep growth on). Each scheduler step runs at most
+one hop per request so a backlogged stream cannot monopolize the GPU.
+Non-streaming requests still use the buffered Flow + HiFT path for the whole utterance.
+
+Optional serving knobs (vocoder factory; keep `tts_engine.factory.token_hop_len`
+in sync if you change the hop):
+
+| Factory arg | Default | Notes |
+|---|---|---|
+| `token_hop_len` | `25` | Base hop / AR follow-up flush; must match training chunk size |
+| `token_max_hop_len` | `100` | Cap for `25 → 50 → 100` growth |
+| `disable_hop_growth` | `false` | Leave off unless A/B'ing; growth ON was better at c=16 |
 
 ```bash
 curl -X POST http://localhost:8000/v1/audio/speech \
@@ -322,13 +459,11 @@ curl -X POST http://localhost:8000/v1/audio/speech \
     "input": "Get the trust fund to the bank early.",
     "ref_audio": "https://huggingface.co/datasets/zhaochenyang20/seed-tts-eval-mini/resolve/main/en/prompt-wavs/common_voice_en_10119832.wav",
     "ref_text": "We asked over twenty different people, and they all said it was his.",
-    "response_format": "wav"
+    "stream": true,
+    "response_format": "pcm"
   }' \
-  --output output.wav
+  --output output.pcm
 ```
-
-The request above uses the supported buffered response path. A future streaming implementation
-will use `response_format="pcm"` and emit audio before speech-token generation completes.
 
 ## Generation Parameters
 
@@ -343,10 +478,27 @@ will use `response_format="pcm"` and emit audio before speech-token generation c
 | `temperature` | `0.7` | Sampling temperature |
 | `top_p` | `0.8` | Top-p sampling |
 | `top_k` | `20` | Top-k sampling |
-| `repetition_penalty` | `1.1` | Repetition penalty |
+| `repetition_penalty` | `1.21` | Repetition penalty |
 | `max_new_tokens` | `min(2048, 20x target text tokens)` | Maximum number of generated speech tokens. If omitted, derived from the target text length (capped at 2048); stop tokens are also suppressed until at least `2x` that length has been generated |
 | `seed` | `null` | Random seed for reproducibility |
-| `stream` | `false` | Reserved for the planned incremental decoder; current decode is buffered |
+| `stream` | `false` | Incremental causal Flow + HiFT; first PCM chunk after `28 + prompt_pad` speech tokens (`prompt_pad` rounds the prompt length to a multiple of 25) |
+
+Sampling is repetition-aware, as in upstream CosyVoice: a sampled speech token that already appears among the last 10 generated tokens is masked and redrawn once from the full distribution at the request temperature. Greedy requests (`top_k = 1`) sample without the redraw.
+
+## Benchmarking
+
+Measure causal streaming with Seed-TTS-Eval against a running server:
+
+```bash
+python -m benchmarks.eval.benchmark_tts_seedtts \
+  --model FunAudioLLM/Fun-CosyVoice3-0.5B-2512 \
+  --port 8000 --lang en --max-concurrency 16 \
+  --use-existing-server --generate-only --stream \
+  --output-dir results/fun_cosyvoice3_en
+```
+
+Use `--lang zh --no-ref-text` for the Chinese cross-lingual split. See
+`benchmarks/README.md` for the full workflow.
 
 ## Model Architecture
 
@@ -361,30 +513,15 @@ will use `response_format="pcm"` and emit audio before speech-token generation c
 
 ## Known Limitations
 
-- **Reference audio required.** CosyVoice3 requires a reference audio clip for voice
-  cloning; it does not support text-only synthesis without a speaker reference.
-- **30-second limit.** Reference audio must be 30 seconds or shorter for speech token
-  extraction.
-- **Speaker similarity.** Providing `ref_text` (the transcript) yields better voice
-  similarity than omitting it (cross-lingual mode).
-- **Reference shape.** The endpoint accepts either `ref_audio` plus optional `ref_text`,
-  or one item in `references`; multiple references are rejected for this checkpoint.
-- **Prompt modes.** Provide either `ref_text` or `instructions` for the reference prompt,
-  not both. `instructions` selects CosyVoice3 `instruct2` conditioning.
-- **Reference conditioning cache.** Local files, data URLs, and byte payloads are cached
-  by audio content and encoder configuration. Mutable HTTP URLs are intentionally encoded
-  on every request instead of being cached by URL alone.
-- **Speed control.** Applied once, on the decoded waveform, by the shared
-  `/v1/audio/speech` response-encoding path.
+- **Reference audio required.** CosyVoice3 requires a reference audio clip for voice cloning; it does not support text-only synthesis without a speaker reference.
+- **30-second limit.** Reference audio must be 30 seconds or shorter for speech token extraction.
+- **Speaker similarity.** Providing `ref_text` (the transcript) yields better voice similarity than omitting it (cross-lingual mode).
+- **Reference shape.** The endpoint accepts either `ref_audio` plus optional `ref_text`, or one item in `references`; multiple references are rejected for this checkpoint.
+- **Prompt modes.** Provide either `ref_text` or `instructions` for the reference prompt, not both. `instructions` selects CosyVoice3 `instruct2` conditioning.
+- **Reference conditioning cache.** Local files, data URLs, and byte payloads are cached by audio content and encoder configuration. Mutable HTTP URLs are intentionally encoded on every request instead of being cached by URL alone.
+- **Speed control.** Applied once, on the decoded waveform, by the shared `/v1/audio/speech` response-encoding path.
 - **Voice conversion.** Voice conversion is outside the current zero-shot TTS scope.
-- **Streaming decode.** The current implementation buffers all speech tokens before Flow + HiFT
-  decoding. Incremental PCM output is planned but is not yet available.
-- **Flow batch scope.** Flow batching supports the CosyVoice PyTorch estimator
-  and the opt-in TensorRT estimator (`enable_flow_estimator_trt`). Do not enable
-  TensorRT together with `enable_dit_torch_compile`. HiFT batches only the mels
-  produced by one Flow bucket while padding waste stays within
-  `hift_max_padding_waste`. Streaming Flow/HiFT batching is outside the current
-  buffered decoder.
-- **cosyvoice dependency.** The `cosyvoice` package has no PyPI release and must be
-  installed from GitHub. Matcha-TTS is a required submodule and must also be importable;
-  only the CosyVoice Flow and HiFT paths are used by the buffered decoder.
+- **Streaming decode.** Causal Flow + HiFT emit PCM after each hop (hop grows 25 → 50 → 100 by default). Quality can differ slightly from the buffered whole-utterance path. Opt-in TensorRT (`enable_flow_estimator_trt`) also accelerates streaming hops; it turns the `enable_dit_torch_compile` default off. TRT freezes DiT attention, so streaming+TRT is not bit-exact with PyTorch streaming. Keep the Module TRT wrapper when streaming: CosyVoice's raw TRT enqueue is incompatible with packed hop-batch CFG shapes.
+- **Flow batch scope.** Flow batching supports the CosyVoice PyTorch estimator and the opt-in TensorRT estimator. Buffered HiFT grouping is independent and uses `hift_max_padding_waste`. Streaming coalesces first/follow-up hops across requests (`_can_batch_stream_chunks`, short peer wait) so TTFP stays low under load.
+- **Speculative decoding.** The DSpark draft runs on CUDA with TP 1, the TTS engine's scheduler steps synchronously while it is on, weight updates are refused while it is loaded, and `seed` does not make output reproducible.
+- **cosyvoice dependency.** The `cosyvoice` package has no PyPI release and must be installed from GitHub. Matcha-TTS is a required submodule and must also be importable; only the CosyVoice Flow and HiFT paths are used by the vocoder.

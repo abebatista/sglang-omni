@@ -1,4 +1,4 @@
-# SGLang-Omni Rust Router
+# SGLang-Omni Router
 
 `sgl-omni-router` is the multi-threaded Rust data plane for SGLang-Omni. It
 routes OpenAI-compatible chat, speech, transcription, translation, and
@@ -61,7 +61,7 @@ supervise them.
 
 ```bash
 git clone https://github.com/sgl-project/sglang-omni.git
-cd sglang-omni/sglang_omni_router/rust
+cd sglang-omni/sglang_omni_router
 
 # Build release binary
 cargo build --release --locked
@@ -161,6 +161,7 @@ limits, and timeouts from the expected workload and worker topology.
 | `GET` | `/ready` | Readiness of every enabled service |
 | `POST` | `/v1/chat/completions` | Chat and multimodal generation |
 | `POST` | `/v1/audio/speech` | Encoded speech or streaming PCM |
+| `GET` | `/v1/audio/speech/{request_id}` | Terminal state of a finished PCM stream, on the worker named by `x-sglang-omni-route-worker` |
 | `POST` | `/v1/audio/speech/batch` | Ordered, unsplit speech batch |
 | `POST` | `/v1/audio/transcriptions` | Multipart transcription |
 | `POST` | `/v1/audio/translations` | Multipart translation |
@@ -181,6 +182,17 @@ encoding, and oversized uploads are rejected before dispatch.
 A canonical `x-request-id` identifies each request. A valid caller value is
 preserved; otherwise the router generates one. The same value is sent to the
 worker and returned to the client.
+
+Media responses carry `x-sglang-omni-worker`, the configured id of the worker
+that answered. A streaming PCM speech response also carries
+`x-sglang-omni-speech-id`, a generated resource ID independent of `x-request-id`.
+After the stream ends, use that speech ID in `GET /v1/audio/speech/{request_id}`
+and echo the worker ID as `x-sglang-omni-route-worker`. The router pins the lookup
+to that worker without keeping per-request state. The hint is not forwarded
+upstream. A missing or duplicate hint answers `400`, a worker id outside the
+media trust domain `404`, and an unhealthy worker `503`. Outcomes are retained
+in a bounded worker-local cache; a missing outcome does not establish how
+generation ended.
 
 ## Routing and Relay
 
@@ -272,9 +284,9 @@ Speech configuration is replayed byte-for-byte; the router extracts routing
 facts while the worker owns protocol-value validation.
 
 Uploaded voices have one explicit owner configured by
-`router.voice_owner_worker_id`. Voice CRUD and requests that depend on a stored
-voice are pinned to that worker. Stateless speech continues to use normal
-worker selection. The router does not store, replicate, or reconcile
+`router.voice_owner_worker_id`. Voice CRUD and uploaded-name requests are
+pinned to that worker. Preset names and explicit references continue to use
+normal worker selection. The router does not store, replicate, or reconcile
 worker-local voice data. `voice_name_policy = "preset"` declares names provided
 by the serving model. `voice_name_policy = "uploaded"` declares names resolved
 from worker-local voice state; hybrid pipelines should use `uploaded` so named
@@ -299,15 +311,38 @@ compatible. Current worker load does not change readiness.
 
 `/v1/models` returns a sorted, deduplicated inventory built from worker defaults
 and correlated profile model IDs. `/metrics` exposes Prometheus lifecycle,
-readiness, health, admission, and worker-load gauges. `/diagnostics` returns
-bounded deterministic JSON for lifecycle, readiness, admission, and configured
-workers.
+readiness, health, admission, worker-load, listener, buffered-byte,
+classification-slot, and WebSocket-session gauges. It also exposes cumulative
+request and response-header counts, router-generated faults, saturation
+rejections, worker probe outcomes, classification outcomes, WebSocket
+termination reasons, and committed HTTP response-body outcomes.
+
+The response-header histogram measures from router boundary entry until an HTTP
+response is available. It does not measure response-body completion, streaming
+TTFT, or WebSocket-session duration. Requests cancelled before that boundary
+are counted separately. Classification histograms separate slot wait,
+blocking-executor wait, and execution for each request kind. Blocking work that
+outlives a caller timeout or cancellation records its phase durations when that
+work starts or finishes, without changing the caller's terminal outcome.
+WebSocket termination counters distinguish setup from active relay and record
+one bounded terminal cause per upgraded session. They do not measure completion
+of the bounded close handshake. HTTP response-body counters distinguish
+complete bodies, upstream body errors, and bodies dropped before completion.
+The post-commit relay-failure counter is the upstream-error subset.
+`/diagnostics` returns bounded deterministic JSON for the same router-local
+state and marks the configured voice owner. Each diagnostic worker includes
+cumulative dispatch counts for the fixed service classes and voice-control
+operations. A speech batch contributes one dispatch while active worker load
+remains item-weighted. Workers also include their latest probe result, HTTP
+status when present, observation time, transition streaks, and cumulative
+outcomes.
 
 Operations responses snapshot router-local state and never contact workers.
 Admission values come from the semaphores that enforce router limits. Worker
 load comes from the same counters used by `least_requests`. Metric labels use
 fixed vocabularies instead of worker IDs, model IDs, request IDs, paths, or
-client input.
+client input. Listener usage includes the slot reserved by the pending accept.
+registered WebSocket sessions represent callbacks retained for shutdown.
 
 Structured logging covers lifecycle events, health transitions, and exceptional
 conditions. `logging.filter` accepts a tracing filter expression, and
@@ -417,8 +452,3 @@ loopback sockets where transport behavior is part of the contract.
 | `src/websocket/` | Speech and realtime session setup and relay |
 | `src/operations.rs` | Models, metrics, and diagnostics |
 | `tests/` | Process and protocol integration tests |
-
-## Python Router
-
-The Python router remains available as `sgl-omni-router-py`. Its guide is
-`docs/basic_usage/python_router.md`.
