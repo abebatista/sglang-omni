@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.2.0" />
-    <meta name="docbuild:last-update" content="Nov 05, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 06, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -969,9 +969,11 @@ inherited upstream change a user can observe, and the A/B with both arms’
 commits and image digests, sample counts and the profiler attribution for
 any delta outside noise. Measurements and inferences are labeled as what
 they are.</p>
-<p>Run CI with <code class="docutils literal notranslate"><span class="pre">run-all-ci</span></code>. A stage without a model label draws its model at
-random, so give each preset its own run on the new image before merge: keep
-<code class="docutils literal notranslate"><span class="pre">run-all-ci</span></code> and add one model label per stage, for example
+<p>Run CI on every H100 model stage with
+<code class="docutils literal notranslate"><span class="pre">/tag-and-rerun-ci</span> <span class="pre">asr</span> <span class="pre">tts</span> <span class="pre">mps</span> <span class="pre">omni</span> <span class="pre">full-duplex</span> <span class="pre">cascaded</span></code>. A stage without a
+model label draws its model at random, so give each preset its own run on the
+new image before merge: keep those stage labels and add one model label per
+stage, for example
 <code class="docutils literal notranslate"><span class="pre">run-moss-tts-local-transformer-v1.5</span></code>, <code class="docutils literal notranslate"><span class="pre">run-fun-asr-nano-2512</span></code> and
 <code class="docutils literal notranslate"><span class="pre">run-minicpm-o-4.5</span></code>. The model labels within a stage are exclusive. The
 CI section of the pull request template lists every label.</p>
@@ -1061,7 +1063,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 05, 2026.
+  Last updated on Nov 06, 2026.
   <br/>
 </p>
   </div>
