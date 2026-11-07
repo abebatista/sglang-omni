@@ -62,7 +62,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.2.0" />
-    <meta name="docbuild:last-update" content="Nov 06, 2026"/>
+    <meta name="docbuild:last-update" content="Nov 07, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -216,7 +216,10 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Platforms</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1 has-children"><a class="reference internal" href="../get_started/installation_apple_silicon.html">Apple Silicon</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
-<li class="toctree-l2"><a class="reference internal" href="../mlx/index.html">Native MLX / Voxt</a></li>
+<li class="toctree-l2 has-children"><a class="reference internal" href="../mlx/index.html">Native MLX / Voxt</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l3"><a class="reference internal" href="../mlx/long_audio.html">Qwen3-ASR long-recording measurements</a></li>
+</ul>
+</details></li>
 </ul>
 </details></li>
 <li class="toctree-l1"><a class="reference internal" href="../get_started/installation_npu.html">Ascend NPU</a></li>
@@ -605,6 +608,7 @@
 </pre></div>
 </div>
 <p>The BF16 weights occupy approximately 57 GiB before KV cache and runtime allocations. A single H200 can host this configuration. Decode CUDA graphs are enabled and Torch compilation is disabled by default.</p>
+<p>For Intel GPUs, follow the <a class="reference internal" href="../get_started/installation_xpu.html#hy-simulmt-speech-translation-multi-xpu-tensor-parallel"><span class="std std-ref">Hy-SimulMT XPU recipe</span></a>: 24 GB cards need the stage sharded across four of them.</p>
 </section>
 <section id="translate-an-audio-file">
 <h2>Translate an audio file<a class="headerlink" href="#translate-an-audio-file" title="Link to this heading">#</a></h2>
@@ -775,7 +779,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 06, 2026.
+  Last updated on Nov 07, 2026.
   <br/>
 </p>
   </div>
